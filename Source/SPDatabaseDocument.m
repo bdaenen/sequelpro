@@ -678,13 +678,85 @@ static BOOL isOSAtLeast10_14;
 		[[chooseDatabaseButton menu] addItem:[NSMenuItem separatorItem]];
 	}
 
+	NSMutableArray *customDbNames = [[NSMutableArray alloc] initWithCapacity:[allDatabases count]];
 	// Add user databases
 	for (NSString *database in allDatabases)
 	{
+		NSString *customDbName = [self findCustomDbName:database];
+		[customDbNames addObject:customDbName];
+	}
+	NSArray *sortedCustomDbNames = [customDbNames copy];
+	sortedCustomDbNames = [sortedCustomDbNames sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+
+	for (NSString *database in sortedCustomDbNames) {
 		[chooseDatabaseButton addItemWithTitle:database];
 	}
 
 	(![self database]) ? [chooseDatabaseButton selectItemAtIndex:0] : [chooseDatabaseButton selectItemWithTitle:[self database]];
+}
+
+- (NSString *)findCustomDbName:(NSString *)dbName
+{
+	if (![dbName hasPrefix:@"db"]) {
+		return dbName;
+	}
+	int pid = [[NSProcessInfo processInfo] processIdentifier];
+	NSFileManager *fileManager = [NSFileManager defaultManager];
+	
+	NSPipe *pipe = [NSPipe pipe];
+	
+
+	NSTask *task = [[NSTask alloc] init];
+	task.arguments = @[@"--raw", dbName];
+	task.standardOutput = pipe;
+	NSString *result = [[NSUserDefaults standardUserDefaults] stringForKey:dbName];
+	if (result) {
+		return result;
+	}
+	else {
+		result = @"";
+	}
+	
+	NSArray *possiblePaths = @[@"/usr/local/bin/l27", @"/usr/local/bin/l27-cli", @"/usr/bin/l27", @"/usr/bin/l27-cli"];
+	
+	for (id path in possiblePaths) {
+		if ([fileManager fileExistsAtPath:path]){
+			task.launchPath = path;
+			NSLog (@"found l27 at:\n%@", path);
+			break;
+		}
+	}
+	
+	if (task.launchPath) {
+		@try {
+			[task launch];
+			NSData *output = [[pipe fileHandleForReading] readDataToEndOfFile];
+			NSError *error = nil;
+			NSArray *array = [NSJSONSerialization JSONObjectWithData: output options:NSJSONReadingMutableContainers error:&error];
+			NSDictionary *results = [array objectAtIndex:0];
+			NSString *name = [results objectForKey:@"name"];
+			
+			if (!name) {
+				return dbName;
+			}
+			
+			result = [result stringByAppendingString:@"[["];
+			result = [result stringByAppendingString:name];
+			result = [result stringByAppendingString:@"]] "];
+			result = [result stringByAppendingString:dbName];
+			
+			[[NSUserDefaults standardUserDefaults] setValue:result forKey:dbName];
+			return result;
+		}
+		@catch (NSException *exception) {
+			return dbName;
+		}
+	}
+	else {
+		return dbName;
+	}
+	
+	return dbName;
 }
 
 #ifndef SP_CODA /* chooseDatabase: */
@@ -695,6 +767,17 @@ static BOOL isOSAtLeast10_14;
  */
 - (IBAction)chooseDatabase:(id)sender
 {
+	NSString *regex = @"\\[\\[.*\\]\\] ";
+	NSString *replacedDbname = [chooseDatabaseButton titleOfSelectedItem];
+	NSString *dbname = [replacedDbname stringByReplacingOccurrencesOfRegex:regex withString:@""];
+	
+	if (dbname != replacedDbname) {
+		[self setDatabases:sender];
+	}
+	
+	[chooseDatabaseButton selectItemWithTitle:replacedDbname];
+	[[chooseDatabaseButton selectedItem] setTitle:dbname];
+
 	if (![tablesListInstance selectionShouldChangeInTableView:nil]) {
 		[chooseDatabaseButton selectItemWithTitle:[self database]];
 		return;
@@ -3880,7 +3963,7 @@ static BOOL isOSAtLeast10_14;
 
 		// If a database is selected, add to the window - and other tabs if host is the same but db different or table is not set
 		if ([self database]) {
-			[windowTitle appendFormat:@"/%@", [self database]];
+			[windowTitle appendFormat:@"/%@", [self findCustomDbName:[self database]]];
 			if (frontTableDocument == self
 				|| ![frontTableDocument getConnection]
 				|| [[frontTableDocument name] isNotEqualTo:[self name]]
