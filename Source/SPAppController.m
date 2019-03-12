@@ -2625,4 +2625,46 @@
 	[super dealloc];
 }
 
+/**
+ * Clears the custom database name cache.
+ */
+- (IBAction)clearDbNameCache:(id)sender
+{
+	NSArray *keys = [[[NSUserDefaults standardUserDefaults] dictionaryRepresentation] allKeys];
+	
+	for(NSString* key in keys){
+		if ([key hasPrefix:@"tobania."]) {
+//			NSString* value = [[NSUserDefaults standardUserDefaults] valueForKey:key];
+//			NSString* regex = @"^db[\\d]*$";
+//			NSPredicate *isDbName = [NSPredicate predicateWithFormat:@"SELF MATCHES %@", regex];
+			
+//			if ([isDbName evaluateWithObject: value]){
+				[[NSUserDefaults standardUserDefaults] removeObjectForKey:key];
+//			}
+		}
+		NSLog(@"value: %@ forKey: %@",[[NSUserDefaults standardUserDefaults] valueForKey:key],key);
+	}
+}
+
+/**
+ * Clears the custom database name cache stored in the legacy key format.
+ */
+- (IBAction)clearLegacyDbNameCache:(id)sender
+{
+	NSArray *keys = [[[NSUserDefaults standardUserDefaults] dictionaryRepresentation] allKeys];
+	
+	for(NSString* key in keys){
+		if ([key hasPrefix:@"db"]) {
+			NSString* value = [[NSUserDefaults standardUserDefaults] valueForKey:key];
+			NSString* regex = @"^db[\\d]*$";
+			NSPredicate *isDbName = [NSPredicate predicateWithFormat:@"SELF MATCHES %@", regex];
+			
+			if ([isDbName evaluateWithObject: value]){
+				[[NSUserDefaults standardUserDefaults] removeObjectForKey:key];
+			}
+		}
+		NSLog(@"value: %@ forKey: %@",[[NSUserDefaults standardUserDefaults] valueForKey:key],key);
+	}
+}
+
 @end

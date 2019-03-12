@@ -702,14 +702,16 @@ static BOOL isOSAtLeast10_14;
 	}
 	int pid = [[NSProcessInfo processInfo] processIdentifier];
 	NSFileManager *fileManager = [NSFileManager defaultManager];
+	NSString *cachePrefix = @"tobania.";
+	NSString *cacheKey = [cachePrefix stringByAppendingString:dbName];
 	
 	NSPipe *pipe = [NSPipe pipe];
 	
-
 	NSTask *task = [[NSTask alloc] init];
 	task.arguments = @[@"--raw", dbName];
 	task.standardOutput = pipe;
-	NSString *result = [[NSUserDefaults standardUserDefaults] stringForKey:dbName];
+	
+	NSString *result = [[NSUserDefaults standardUserDefaults] stringForKey:cacheKey];
 	if (result) {
 		return result;
 	}
@@ -740,12 +742,12 @@ static BOOL isOSAtLeast10_14;
 				return dbName;
 			}
 			
-			result = [result stringByAppendingString:@"[["];
 			result = [result stringByAppendingString:name];
-			result = [result stringByAppendingString:@"]] "];
+			result = [result stringByAppendingString:@" [["];
 			result = [result stringByAppendingString:dbName];
+			result = [result stringByAppendingString:@"]]"];
 			
-			[[NSUserDefaults standardUserDefaults] setValue:result forKey:dbName];
+			[[NSUserDefaults standardUserDefaults] setValue:result forKey:cacheKey];
 			return result;
 		}
 		@catch (NSException *exception) {
@@ -767,9 +769,14 @@ static BOOL isOSAtLeast10_14;
  */
 - (IBAction)chooseDatabase:(id)sender
 {
-	NSString *regex = @"\\[\\[.*\\]\\] ";
 	NSString *replacedDbname = [chooseDatabaseButton titleOfSelectedItem];
-	NSString *dbname = [replacedDbname stringByReplacingOccurrencesOfRegex:regex withString:@""];
+	NSString *dbname = replacedDbname;
+	NSRange start = [replacedDbname rangeOfString:@"[["];
+	NSRange end = [replacedDbname rangeOfString:@"]]"];
+	
+	if (start.location != NSNotFound && end.location != NSNotFound && end.location > start.location) {
+		dbname = [replacedDbname substringWithRange:NSMakeRange(start.location+2, end.location-(start.location+2))];
+	}
 	
 	if (dbname != replacedDbname) {
 		[self setDatabases:sender];
