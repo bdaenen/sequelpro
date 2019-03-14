@@ -994,6 +994,25 @@ CQ
                         </items>
                     </menu>
                 </menuItem>
+                <menuItem title="Tobania" id="TOA-41-vIT">
+                    <modifierMask key="keyEquivalentModifierMask"/>
+                    <menu key="submenu" title="Tobania" id="1lR-dW-UmY">
+                        <items>
+                            <menuItem title="Clear dbname cache" id="ha7-mV-Hfi">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="clearDbNameCache:" target="213" id="fuG-Ak-LTN"/>
+                                </connections>
+                            </menuItem>
+                            <menuItem title="Clear legacy dbname cache" id="lwG-XR-fw9">
+                                <modifierMask key="keyEquivalentModifierMask"/>
+                                <connections>
+                                    <action selector="clearLegacyDbNameCache:" target="213" id="ft0-bp-eF0"/>
+                                </connections>
+                            </menuItem>
+                        </items>
+                    </menu>
+                </menuItem>
                 <menuItem title="Help" tag="8" id="103">
                     <menu key="submenu" title="Help" id="106">
                         <items>
@@ -1050,25 +1069,6 @@ CQ
                         </items>
                     </menu>
                 </menuItem>
-                <menuItem title="Tobania" id="TOA-41-vIT">
-                    <modifierMask key="keyEquivalentModifierMask"/>
-                    <menu key="submenu" title="Tobania" id="1lR-dW-UmY">
-                        <items>
-                            <menuItem title="Clear dbname cache" id="ha7-mV-Hfi">
-                                <modifierMask key="keyEquivalentModifierMask"/>
-                                <connections>
-                                    <action selector="clearDbNameCache:" target="213" id="fuG-Ak-LTN"/>
-                                </connections>
-                            </menuItem>
-                            <menuItem title="Clear legacy dbname cache" id="lwG-XR-fw9">
-                                <modifierMask key="keyEquivalentModifierMask"/>
-                                <connections>
-                                    <action selector="clearLegacyDbNameCache:" target="213" id="ft0-bp-eF0"/>
-                                </connections>
-                            </menuItem>
-                        </items>
-                    </menu>
-                </menuItem>
             </items>
             <connections>
                 <outlet property="delegate" destination="213" id="1193"/>
@@ -1107,6 +1107,7 @@ CQ
                     </menu>
                 </menuItem>
             </items>
+            <point key="canvasLocation" x="104" y="282"/>
         </menu>
         <userDefaultsController representsSharedInstance="YES" id="1210"/>
     </objects>

@@ -181,7 +181,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>1.2.1-tobania.2</string>
+	<string></string>
 	<key>FRFeedbackReporter.maxConsoleLogSize</key>
 	<integer>10000</integer>
 	<key>FRFeedbackReporter.targetURL</key>
@@ -193,9 +193,9 @@
 	<key>LSMinimumSystemVersionByArchitecture</key>
 	<dict>
 		<key>i386</key>
-		<string>10.6.0</string>
+		<string>10.12.0</string>
 		<key>x86_64</key>
-		<string>10.6.0</string>
+		<string>10.12.0</string>
 	</dict>
 	<key>NSAppTransportSecurity</key>
 	<dict>
@@ -261,7 +261,7 @@
 	<key>SUEnableSystemProfiling</key>
 	<true/>
 	<key>SUFeedURL</key>
-	<string>https://updates.sequelpro.benn0.be</string>
+	<string>https://updates.sequelpro.benn0.be/releases.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>G01pFiw9Wr2D2Cu+iHdwk5N1UKmXxllYbgBFm8hIiOU=</string>
 	<key>UTExportedTypeDeclarations</key>
