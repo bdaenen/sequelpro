@@ -4,12 +4,10 @@ about: Create a report to help us improve
 
 ---
 
-<!-- Please search existing issues to avoid creating duplicates. -->
-<!-- For application crashes on macOS 10.14 (Mojave) please see issue #3116. -->
+<!-- Please check if your bug doesn't happen on the original, unforked sequelpro/sequelpro. If it does, report it there. -->
 
-- Sequel Pro Version:
+- Sequel Pro Version (including -tobania.x postfix):
 - macOS Version:
-- MySQL Version:
 
 **Description**
 A clear and concise description of what the bug is.
