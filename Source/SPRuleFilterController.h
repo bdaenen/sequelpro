@@ -42,6 +42,8 @@ NSString * const SPRuleFilterHeightChangedNotification;
 	IBOutlet SPTablesList *tablesListInstance;
 	IBOutlet NSView *tableContentViewBelow;
 	IBOutlet NSButton *filterButton;
+	IBOutlet NSButton *addFilterButton;
+	IBOutlet NSButton *resetButton;
 
 	NSMutableArray *columns;
 	NSMutableDictionary *contentFilters;
@@ -59,6 +61,8 @@ NSString * const SPRuleFilterHeightChangedNotification;
 	BOOL enabled;
 	
 	NSUInteger opNodeCacheVersion;
+	BOOL isDoingChangeCausedOutsideOfRuleEditor;
+	NSInteger previousRowCount;
 }
 
 /**

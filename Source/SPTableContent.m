@@ -175,13 +175,13 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 		tableRowsSelectable = YES;
 		isFirstChangeInView = YES;
 
-		showFilterRuleEditor = NO;
-
 		isFiltered = NO;
 		isLimited = NO;
 		isInterruptedLoad = NO;
 
 		prefs = [NSUserDefaults standardUserDefaults];
+
+		showFilterRuleEditor = [prefs boolForKey:SPRuleFilterEditorLastVisibilityChoice];
 
 		usedQuery = [[NSString alloc] initWithString:@""];
 
@@ -1028,7 +1028,7 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 		// If the clause has the placeholder $BINARY that placeholder will be replaced
 		// by BINARY if the user pressed ⇧ while invoking 'Filter' otherwise it will
 		// replaced by @"".
-		BOOL caseSensitive = (([[NSApp currentEvent] modifierFlags] & NSShiftKeyMask) > 0);
+		BOOL caseSensitive = (([[NSApp currentEvent] modifierFlags] & NSEventModifierFlagShift) > 0);
 
 		NSError *err = nil;
 		NSString *filter = [ruleFilterController sqlWhereExpressionWithBinary:caseSensitive error:&err];
@@ -1271,6 +1271,10 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 		activeFilter = SPTableContentFilterSourceRuleFilter;
 		resetPaging = YES;
 	}
+	else if (sender == nil) {
+		activeFilter = SPTableContentFilterSourceNone;
+		resetPaging = YES;
+	}
 #endif
 
 	NSString *taskString;
@@ -1350,6 +1354,7 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 - (IBAction)toggleRuleEditorVisible:(id)sender
 {
 	BOOL shouldShow = !showFilterRuleEditor;
+	[prefs setBool:shouldShow forKey:SPRuleFilterEditorLastVisibilityChoice];
 	[self setRuleEditorVisible:shouldShow animate:YES];
 	// if this was the active filter before, it no longer can be the active filter when it is hidden
 	if(activeFilter == SPTableContentFilterSourceRuleFilter && !shouldShow) {
@@ -1360,8 +1365,10 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 - (void)setRuleEditorVisible:(BOOL)show animate:(BOOL)animate
 {
 	// we can't change the state of the button here, because the mouse click already changed it
-	if(show) {
-		if([ruleFilterController isEmpty]) {
+	if((showFilterRuleEditor = show)) {
+		[ruleFilterController setEnabled:YES];
+		// if it was the user who enabled the filter (indicated by the animation) add an empty row by default
+		if([ruleFilterController isEmpty] && animate) {
 			[ruleFilterController addFilterExpression];
 			// the sizing will be updated automatically by adding a row
 		}
@@ -1370,9 +1377,9 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 		}
 	}
 	else {
+		[ruleFilterController setEnabled:NO]; // disable it to not trigger any key bindings when hidden
 		[self updateFilterRuleEditorSize:0.0 animate:animate];
 	}
-	showFilterRuleEditor = show;
 }
 
 - (void)setUsedQuery:(NSString *)query
@@ -1391,13 +1398,13 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 			return;
 		}
 
-		NSUInteger modifierFlags = [[NSApp currentEvent] modifierFlags];
+		NSEventModifierFlags modifierFlags = [[NSApp currentEvent] modifierFlags];
 
 		// Sets column order as tri-state descending, ascending, no sort, descending, ascending etc. order if the same
 		// header is clicked several times
 		if (sortCol && [[tableColumn identifier] integerValue] == [sortCol integerValue]) {
 			BOOL invert = NO;
-			if (modifierFlags & NSShiftKeyMask) {
+			if (modifierFlags & NSEventModifierFlagShift) {
 				invert = YES;
 			}
 
@@ -1411,7 +1418,7 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 		}
 		else {
 			// When the column is not sorted, allow to sort in reverse order using Shift+click
-			if (modifierFlags & NSShiftKeyMask) {
+			if (modifierFlags & NSEventModifierFlagShift) {
 				isDesc = YES;
 			} else {
 				isDesc = NO;
@@ -1823,7 +1830,7 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 #ifndef SP_CODA
 	// Change the alert's cancel button to have the key equivalent of return
 	[[buttons objectAtIndex:0] setKeyEquivalent:@"d"];
-	[[buttons objectAtIndex:0] setKeyEquivalentModifierMask:NSCommandKeyMask];
+	[[buttons objectAtIndex:0] setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
 	[[buttons objectAtIndex:1] setKeyEquivalent:@"\r"];
 #else
 	[[buttons objectAtIndex:0] setKeyEquivalent:@"\r"];
@@ -3177,7 +3184,7 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 										[tableDataInstance columnNames], @"columnNames",
 										[tableDataInstance getConstraints], @"constraints",
 										nil];
-		[self performSelectorOnMainThread:@selector(setTableDetails:) withObject:tableDetails waitUntilDone:YES];
+		[[self onMainThread] setTableDetails:tableDetails];
 		isFirstChangeInView = NO;
 	}
 
@@ -3449,8 +3456,8 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 
 	NSRect ruleEditorRect = [[[ruleFilterController view] enclosingScrollView] frame];
 
-	//adjust for the UI elements below the rule editor, but only if the view height should not be 0 (ie. hidden)
-	CGFloat containerRequestedHeight =  requestedHeight ? requestedHeight + ruleEditorRect.origin.y : 0;
+	//adjust for the UI elements below the rule editor, but only if the view should not be hidden
+	CGFloat containerRequestedHeight = showFilterRuleEditor ? requestedHeight + ruleEditorRect.origin.y : 0;
 
 	//the rule editor can ask for about one-third of the available space before we have it use it's scrollbar
 	CGFloat topContainerGivenHeight = MIN(containerRequestedHeight,(availableHeight / 3));
@@ -4247,7 +4254,7 @@ static void *TableContentKVOContext = &TableContentKVOContext;
 
 		// By holding ⌘, ⇧, or/and ⌥ copies selected rows as SQL INSERTS
 		// otherwise \t delimited lines
-		if ([[NSApp currentEvent] modifierFlags] & (NSCommandKeyMask|NSShiftKeyMask|NSAlternateKeyMask)) {
+		if ([[NSApp currentEvent] modifierFlags] & (NSEventModifierFlagCommand|NSEventModifierFlagShift|NSEventModifierFlagOption)) {
 			tmp = [tableContentView rowsAsSqlInsertsOnlySelectedRows:YES];
 		}
 		else {

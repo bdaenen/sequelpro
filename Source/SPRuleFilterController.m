@@ -114,6 +114,11 @@ const NSString * const SerFilterExprDefinition = @"_filterDefinition";
 	RuleNodeType type;
 }
 @property(assign, nonatomic) RuleNodeType type;
+/**
+ * This method checks if a node other can take the place of self in a filter row.
+ * The RuleNode implementation checks only that both nodes are of the same type.
+ */
+- (BOOL)isViableReplacementFor:(RuleNode *)other;
 @end
 
 @interface ColumnNode : RuleNode {
@@ -144,6 +149,10 @@ const NSString * const SerFilterExprDefinition = @"_filterDefinition";
 @property (assign, nonatomic) ColumnNode *parentColumn;
 @property (retain, nonatomic) NSDictionary *settings;
 @property (retain, nonatomic) NSDictionary *filter;
+/**
+ * This method is only a shortcut to `-[[node filter] objectForKey:@"MenuLabel"]`
+ */
+- (NSString *)name;
 @end
 
 @interface ArgNode : RuleNode {
@@ -203,7 +212,7 @@ const NSString * const SerFilterExprDefinition = @"_filterDefinition";
 
 #pragma mark -
 
-@interface SPRuleFilterController () <NSRuleEditorDelegate>
+@interface SPRuleFilterController () <NSRuleEditorDelegate, NSTextFieldDelegate>
 
 @property (readwrite, assign, nonatomic) CGFloat preferredHeight;
 
@@ -223,11 +232,18 @@ static void _addIfNotNil(NSMutableArray *array, id toAdd);
 - (void)_resize;
 - (void)openContentFilterManagerForFilterType:(NSString *)filterType;
 - (IBAction)filterTable:(id)sender;
+- (IBAction)resetFilter:(id)sender;
 - (IBAction)_menuItemInRuleEditorClicked:(id)sender;
-- (void)_pretendPlayRuleEditorForCriteria:(NSMutableArray *)criteria displayValues:(NSMutableArray *)displayValues inRow:(NSInteger)row;
+- (void)_pretendPlayRuleEditorForCriteria:(NSMutableArray *)criteria
+                            displayValues:(NSMutableArray *)displayValues
+                                    inRow:(NSInteger)row
+              tryingToPreserveOldCriteria:(NSArray *)oldCriteria
+                            displayValues:(NSArray *)oldDisplayValues;
 - (void)_ensureValidOperatorCache:(ColumnNode *)col;
 static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
-
+- (IBAction)addFilter:(id)sender;
+- (void)_updateButtonStates;
+- (void)_doChangeToRuleEditorData:(void (^)(void))duringBlock;
 @end
 
 @implementation SPRuleFilterController
@@ -245,6 +261,8 @@ static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
 		target = nil;
 		action = NULL;
 		opNodeCacheVersion = 1;
+		isDoingChangeCausedOutsideOfRuleEditor = NO;
+		previousRowCount = 0;
 
 		// Init default filters for Content Browser
 		contentFilters = [[NSMutableDictionary alloc] init];
@@ -283,7 +301,19 @@ static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
 
 - (void)awakeFromNib
 {
-	[filterRuleEditor bind:@"rows" toObject:_modelContainer withKeyPath:@"model" options:nil];
+	// move the add filter button over the filter button (since only one of them can be visible at a time)
+	NSRect filterRect = [filterButton frame];
+	NSRect addFilterRect = [addFilterButton frame];
+	CGFloat widthContainer = [[filterButton superview] frame].size.width;
+	CGFloat deltaR = widthContainer - (filterRect.origin.x + filterRect.size.width);
+	addFilterRect.origin.x = widthContainer - deltaR - addFilterRect.size.width;
+	addFilterRect.origin.y = filterRect.origin.y;
+	addFilterRect.size.height = filterRect.size.height;
+	[addFilterButton setFrame:addFilterRect];
+
+	[self _doChangeToRuleEditorData:^{
+		[filterRuleEditor bind:@"rows" toObject:_modelContainer withKeyPath:@"model" options:nil];
+	}];
 
 	[[NSNotificationCenter defaultCenter] addObserver:self
 	                                         selector:@selector(_contentFiltersHaveBeenUpdated:)
@@ -319,35 +349,37 @@ static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
 
 - (void)setColumns:(NSArray *)dataColumns;
 {
-	// we have to access the model in the same way the rule editor does for it to realize the changes
-	[[_modelContainer mutableArrayValueForKey:@"model"] removeAllObjects];
+	[self _doChangeToRuleEditorData:^{
+		// we have to access the model in the same way the rule editor does for it to realize the changes
+		[[_modelContainer mutableArrayValueForKey:@"model"] removeAllObjects];
 
-	[columns removeAllObjects];
+		[columns removeAllObjects];
 
-	//without a table there is nothing to filter
-	if(dataColumns) {
-		//sort column names if enabled
-		NSArray *columnDefinitions = dataColumns;
-		if ([[NSUserDefaults standardUserDefaults] boolForKey:SPAlphabeticalTableSorting]) {
-			NSSortDescriptor *sortDescriptor = [NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES];
-			columnDefinitions = [columnDefinitions sortedArrayUsingDescriptors:@[sortDescriptor]];
+		//without a table there is nothing to filter
+		if(dataColumns) {
+			//sort column names if enabled
+			NSArray *columnDefinitions = dataColumns;
+			if ([[NSUserDefaults standardUserDefaults] boolForKey:SPAlphabeticalTableSorting]) {
+				NSSortDescriptor *sortDescriptor = [NSSortDescriptor sortDescriptorWithKey:@"name" ascending:YES];
+				columnDefinitions = [columnDefinitions sortedArrayUsingDescriptors:@[sortDescriptor]];
+			}
+
+			// get the columns
+			for (NSDictionary *colDef in columnDefinitions) {
+				ColumnNode *node = [[ColumnNode alloc] init];
+				[node setName:[colDef objectForKey:@"name"]];
+				[node setTypegrouping:[colDef objectForKey:@"typegrouping"]];
+				[columns addObject:node];
+				[node release];
+			}
 		}
 
-		// get the columns
-		for (NSDictionary *colDef in columnDefinitions) {
-			ColumnNode *node = [[ColumnNode alloc] init];
-			[node setName:[colDef objectForKey:@"name"]];
-			[node setTypegrouping:[colDef objectForKey:@"typegrouping"]];
-			[columns addObject:node];
-			[node release];
-		}
-	}
+		// make the rule editor reload the criteria
+		[filterRuleEditor reloadCriteria];
+	}];
 
-	// make the rule editor reload the criteria
-	[filterRuleEditor reloadCriteria];
-
-	// disable UI if no criteria exist
-	[self setEnabled:([columns count] != 0)];
+	// disable UI if no criteria exist (enable otherwise)
+	[self setEnabled:YES];
 }
 
 - (NSInteger)ruleEditor:(NSRuleEditor *)editor numberOfChildrenForCriterion:(nullable id)criterion withRowType:(NSRuleEditorRowType)rowType
@@ -450,7 +482,19 @@ static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
 {
 	switch([(RuleNode *)criterion type]) {
 		case RuleNodeTypeString: return [(StringNode *)criterion value];
-		case RuleNodeTypeColumn: return [(ColumnNode *)criterion name];
+		case RuleNodeTypeColumn: {
+			/*
+			 * We could also return a string here, but we want a hook into the selection process so we can preserve
+			 * the other values in a row when a user changes the column (also see the comment below)
+			 */
+			NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[(ColumnNode *)criterion name] action:NULL keyEquivalent:@""];
+			[item setRepresentedObject:@{
+				@"node": criterion,
+			}];
+			[item setTarget:self];
+			[item setAction:@selector(_menuItemInRuleEditorClicked:)];
+			return [item autorelease];
+		}
 		case RuleNodeTypeOperator: {
 			OpNode *node = (OpNode *)criterion;
 			NSMenuItem *item;
@@ -495,6 +539,8 @@ static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
 			[textField sizeToFit];
 			[textField setTarget:self];
 			[textField setAction:@selector(_textFieldAction:)];
+			[textField setDelegate:self]; // see -control:textView:doCommandBySelector:
+			[textField setToolTip:NSLocalizedString(@"Enter the value to apply the filter condition with.\nPress ↩ to apply the filter or ⇧⌫ to remove this rule.", @"table content : rule filter editor : text input field : tooltip")];
 			if([node initialValue]) [textField setStringValue:[node initialValue]];
 			NSRect frame = [textField frame];
 			//adjust width, to make the field wider
@@ -511,6 +557,39 @@ static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
 	}
 	
 	return nil;
+}
+
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)commandSelector
+{
+	// if the user presses shift+backspace or shift+delete we'll try to remove the whole rule
+	NSEvent *event = [NSApp currentEvent];
+	if(
+		( commandSelector == @selector(deleteBackward:) || commandSelector == @selector(deleteForward:) ) &&
+		[event type] == NSKeyDown &&
+		([event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask) == NSEventModifierFlagShift
+	) {
+		NSInteger row = [filterRuleEditor rowForDisplayValue:control];
+
+		if(row != NSNotFound) {
+			// we'll do the actual processing async, because we are currently in the stack of the object which will be dropped by this action.
+			// so we want the delegate method to have finished first, just to be safe
+			SPMainLoopAsync(^{
+				// if we are about to remove the only row in existance, treat it as a reset instead
+				if([[_modelContainer model] count] == 1) {
+					[self resetFilter:nil];
+				}
+				else {
+					[self _doChangeToRuleEditorData:^{
+						[filterRuleEditor removeRowAtIndex:row];
+					}];
+					[self filterTable:nil]; // trigger a new filtering for convenience. I don't know if that is always the preferred approach...
+				}
+			});
+			return YES;
+		}
+	}
+
+	return NO;
 }
 
 - (IBAction)_textFieldAction:(id)sender
@@ -530,22 +609,22 @@ static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
 
 	if(row == NSNotFound) return; // unknown display values
 
-	OpNode *node = [[(NSMenuItem *)sender representedObject] objectForKey:@"node"];
+	RuleNode *criterion = [[(NSMenuItem *)sender representedObject] objectForKey:@"node"];
 
-	// if the row has an explicit handler, pass on the action and do nothing
-	id _target = [[node settings] objectForKey:@"target"];
-	SEL _action = (SEL)[(NSValue *)[[node settings] objectForKey:@"action"] pointerValue];
-	if(_target && _action) {
-		[_target performSelector:_action withObject:sender];
-		return;
-	} 
+	if([criterion type] == RuleNodeTypeOperator) {
+		OpNode *node = (OpNode *)criterion;
+		// if the row has an explicit handler, pass on the action and do nothing
+		id _target = [[node settings] objectForKey:@"target"];
+		SEL _action = (SEL)[(NSValue *)[[node settings] objectForKey:@"action"] pointerValue];
+		if(_target && _action) {
+			[_target performSelector:_action withObject:sender];
+			return;
+		}
+	}
 
 	/* now comes the painful part, where we'd have to find out where exactly in the row this
 	 * displayValue should appear.
-	 * 
-	 * Luckily we know that this method will only be invoked by the displayValues of OpNode
-	 * and currently OpNode can only appear as the second node in a row (after the column).
-	 * 
+	 *
 	 * Annoyingly we can't tell the rule editor to just replace a single element. We actually
 	 * have to recalculate the whole row starting with the element we replaced - a task the
 	 * rule editor would normally do for us when using NSStrings!
@@ -553,41 +632,55 @@ static BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle);
 	NSMutableArray *criteria = [[filterRuleEditor criteriaForRow:row] mutableCopy];
 	NSMutableArray *displayValues = [[filterRuleEditor displayValuesForRow:row] mutableCopy];
 
-	// find the position of the previous opnode (just for safety)
-	NSUInteger opIndex = NSNotFound;
+	// find the position of the previous node
+	NSUInteger nodeIndex = NSNotFound;
 	NSUInteger i = 0;
 	for(RuleNode *obj in criteria) {
-		if([obj type] == RuleNodeTypeOperator) {
-			opIndex = i;
+		if([obj isViableReplacementFor:criterion]) {
+			nodeIndex = i;
 			break;
 		}
 		i++;
 	}
 
-	if(opIndex < [criteria count]) {
+	if(nodeIndex < [criteria count]) {
 		// yet another uglyness: if one of the displayValues is an input and currently the first responder
 		// we have to manually restore that for the new input we create for UX reasons.
 		// However an NSTextField is seldom a first responder, usually it's an invisible subview of the text field...
 		id firstResponder = [[filterRuleEditor window] firstResponder];
 		BOOL hasFirstResponderInRow = _arrayContainsInViewHierarchy(displayValues, firstResponder);
 
-		//remove previous opnode and everything that follows and append new opnode
-		NSRange stripRange = NSMakeRange(opIndex, ([criteria count] - opIndex));
+		//remove previous node and everything that follows and append new node
+		NSRange stripRange = NSMakeRange(nodeIndex, ([criteria count] - nodeIndex));
+
+		//preserve the old criteria and displayValues, so we can restore the values of input fields if appropriate
+		NSArray *oldCriteria = [criteria copy];
+		NSArray *oldDisplayValues = [displayValues copy];
+
 		[criteria removeObjectsInRange:stripRange];
-		[criteria addObject:node];
+		[criteria addObject:criterion];
 
 		//remove the display value for the old op node and everything that followed
 		[displayValues removeObjectsInRange:stripRange];
 
 		//now we'll fill in everything again
-		[self _pretendPlayRuleEditorForCriteria:criteria displayValues:displayValues inRow:row];
+		[self _pretendPlayRuleEditorForCriteria:criteria
+		                          displayValues:displayValues
+		                                  inRow:row
+		            tryingToPreserveOldCriteria:[oldCriteria subarrayWithRange:stripRange]
+		                          displayValues:[oldDisplayValues subarrayWithRange:stripRange]];
+
+		[oldCriteria release];
+		[oldDisplayValues release];
 
 		//and update the row to its new state
-		[filterRuleEditor setCriteria:criteria andDisplayValues:displayValues forRowAtIndex:row];
+		[self _doChangeToRuleEditorData:^{
+			[filterRuleEditor setCriteria:criteria andDisplayValues:displayValues forRowAtIndex:row];
+		}];
 
 		if(hasFirstResponderInRow) {
 			// make the next possible object after the opnode the new next responder (since the previous one is gone now)
-			for (NSUInteger j = stripRange.location + 1; j < [displayValues count]; ++j) {
+			for (NSUInteger j = nodeIndex + 1; j < [displayValues count]; ++j) {
 				id obj = [displayValues objectAtIndex:j];
 				if([obj respondsToSelector:@selector(acceptsFirstResponder)] && [obj acceptsFirstResponder]) {
 					[[filterRuleEditor window] makeFirstResponder:obj];
@@ -625,31 +718,72 @@ BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle)
  * - row is a valid row within the bounds of the rule editor
  * - criteria contains at least one object
  * - displayValues contains exactly one less object than criteria
+ * - the first object in oldCriteria is what the last object in criteria replaced
+ * - all objects in oldDisplayValues correspond to the objects at the same index in oldCriteria
  */
-- (void)_pretendPlayRuleEditorForCriteria:(NSMutableArray *)criteria displayValues:(NSMutableArray *)displayValues inRow:(NSInteger)row
+- (void)_pretendPlayRuleEditorForCriteria:(NSMutableArray *)criteria
+                            displayValues:(NSMutableArray *)displayValues
+                                    inRow:(NSInteger)row
+              tryingToPreserveOldCriteria:(NSArray *)oldCriteria
+                            displayValues:(NSArray *)oldDisplayValues
 {
-	id curCriterion = [criteria lastObject];
+	RuleNode *curCriterion = [criteria lastObject];
 
 	//first fill in the display value for the current criterion
 	id display = [self ruleEditor:filterRuleEditor displayValueForCriterion:curCriterion inRow:row];
 	if(!display) return; // abort if unset
+
+	// try to restore the value from the previous displayValue for input fields
+	RuleNode *oldCriterion = [oldCriteria objectOrNilAtIndex:0];
+	if([curCriterion type] == RuleNodeTypeArgument && oldCriterion && [curCriterion type] == [oldCriterion type]) {
+		NSTextField *oldField = [oldDisplayValues objectOrNilAtIndex:0];
+		if(oldField) [display setStringValue:[oldField stringValue]];
+	}
 	[displayValues addObject:display];
 
 	// now let's check if we have to go deeper
 	NSRuleEditorRowType rowType = [filterRuleEditor rowTypeForRow:row];
-	if([self ruleEditor:filterRuleEditor numberOfChildrenForCriterion:curCriterion withRowType:rowType]) {
-		// we only care for the first child, though
-		id nextCriterion = [self ruleEditor:filterRuleEditor child:0 forCriterion:curCriterion withRowType:rowType];
-		if(nextCriterion) {
-			[criteria addObject:nextCriterion];
-			[self _pretendPlayRuleEditorForCriteria:criteria displayValues:displayValues inRow:row];
+	if(![self ruleEditor:filterRuleEditor numberOfChildrenForCriterion:curCriterion withRowType:rowType]) return;
+
+	// we only care for the first child, though
+	id nextCriterion = [self ruleEditor:filterRuleEditor child:0 forCriterion:curCriterion withRowType:rowType];
+	if(nextCriterion) {
+		NSArray *nextOldCriteria      = ([oldCriteria count] > 1 ? [oldCriteria subarrayWithRange:NSMakeRange(1, [oldCriteria count] - 1)] : [NSArray array]);
+		NSArray *nextOldDisplayValues = ([oldDisplayValues count] > 1 ? [oldDisplayValues subarrayWithRange:NSMakeRange(1, [oldDisplayValues count] - 1)] : [NSArray array]);
+
+		// if the user changed the column, try to retain the previously selected operation
+		RuleNode *nextOldCriterion = [nextOldCriteria objectOrNilAtIndex:0];
+		if(nextOldCriterion && [nextOldCriterion type] == RuleNodeTypeOperator && [curCriterion type] == RuleNodeTypeColumn) {
+			NSString *opName = [(OpNode *)nextOldCriterion name];
+			OpNode *op = [self _operatorNamed:opName forColumn:(ColumnNode *)curCriterion];
+			if(op) nextCriterion = op;
 		}
+		[criteria addObject:nextCriterion];
+
+		[self _pretendPlayRuleEditorForCriteria:criteria
+		                          displayValues:displayValues
+		                                  inRow:row
+		            tryingToPreserveOldCriteria:nextOldCriteria
+		                          displayValues:nextOldDisplayValues];
 	}
 }
 
 - (IBAction)filterTable:(id)sender
 {
 	if(target && action) [target performSelector:action withObject:self];
+}
+
+- (IBAction)resetFilter:(id)sender
+{
+	[self _doChangeToRuleEditorData:^{
+		[[_modelContainer mutableArrayValueForKey:@"model"] removeAllObjects];
+	}];
+	if(target && action) [target performSelector:action withObject:nil];
+}
+
+- (IBAction)addFilter:(id)sender
+{
+	[self addFilterExpression];
 }
 
 - (void)_resize
@@ -682,11 +816,36 @@ BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle)
 	// We can't do this here, because it will cause rows to jump around when removing them (the add case works fine, though)
 	[self performSelector:@selector(_resize) withObject:nil afterDelay:0.2];
 	//[self _resize];
+	[self _updateButtonStates];
+
+	// if the user removed the last row in the editor by pressing "-" (and only then) we immediately want to trigger a filter reset.
+	// There are two problems with that:
+	// - The rule editor is very liberal in the use of this notification. Receiving it does not mean the number of rows actually did change
+	// - There is no direct way to know whether the action was triggered by the user, so we can only try to exclude all other causes of changes
+	NSInteger newRowCount = [filterRuleEditor numberOfRows];
+	if(!isDoingChangeCausedOutsideOfRuleEditor && previousRowCount > 0 && newRowCount == 0) {
+		if(target && action) [target performSelector:action withObject:nil];
+	}
+	previousRowCount = newRowCount;
+}
+
+- (void)_updateButtonStates
+{
+	BOOL empty = [self isEmpty];
+	[addFilterButton setHidden:!empty];
+	[filterButton setHidden:empty];
+
+	[resetButton setEnabled:(enabled && !empty)];
+	[filterButton setEnabled:(enabled && !empty)];
+	[filterRuleEditor setEnabled:enabled];
+	[addFilterButton setEnabled:(enabled && empty)];
 }
 
 - (void)dealloc
 {
-	[filterRuleEditor unbind:@"rows"];
+	[self _doChangeToRuleEditorData:^{
+		[filterRuleEditor unbind:@"rows"];
+	}];
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	// WARNING: THIS MUST COME AFTER -unbind:! See the class comment on ModelContainer for the reasoning
 	SPClear(_modelContainer);
@@ -901,8 +1060,10 @@ BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle)
 {
 	// invalidate our OpNode caches
 	opNodeCacheVersion++;
-	//tell the rule editor to reload its criteria
-	[filterRuleEditor reloadCriteria];
+	[self _doChangeToRuleEditorData:^{
+		//tell the rule editor to reload its criteria
+		[filterRuleEditor reloadCriteria];
+	}];
 }
 
 - (void)_ensureValidOperatorCache:(ColumnNode *)col
@@ -923,8 +1084,10 @@ BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle)
 {
 	// reject this if no table columns exist: would cause invalid state (empty filter rows)
 	if(![columns count]) return;
-	
-	[filterRuleEditor insertRowAtIndex:0 withType:NSRuleEditorRowTypeSimple asSubrowOfRow:-1 animate:NO];
+
+	[self _doChangeToRuleEditorData:^{
+		[filterRuleEditor insertRowAtIndex:0 withType:NSRuleEditorRowTypeSimple asSubrowOfRow:-1 animate:NO];
+	}];
 }
 
 - (NSRuleEditor *)view
@@ -939,9 +1102,8 @@ BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle)
 
 - (void)setEnabled:(BOOL)_enabled
 {
-	enabled = _enabled;
-	[filterButton setEnabled:_enabled];
-	[filterRuleEditor setEnabled:_enabled];
+	enabled = _enabled && [columns count] != 0;
+	[self _updateButtonStates];
 }
 
 - (NSString *)sqlWhereExpressionWithBinary:(BOOL)isBINARY error:(NSError **)err
@@ -1039,7 +1201,7 @@ BOOL _arrayContainsInViewHierarchy(NSArray *haystack, id needle)
 			SerFilterClass: SerFilterClassExpression,
 			SerFilterExprColumn: [col name],
 			SerFilterExprType: [[op settings] objectForKey:@"filterType"],
-			SerFilterExprComparison: [[op filter] objectForKey:@"MenuLabel"],
+			SerFilterExprComparison: [op name],
 			SerFilterExprValues: filterValues,
 		};
 		if(includeDefinition) {
@@ -1073,9 +1235,11 @@ void _addIfNotNil(NSMutableArray *array, id toAdd)
 		}
 	}
 
-	// we have to access the model in the same way the rule editor does for it to realize the changes
-	NSMutableArray *proxy = [_modelContainer mutableArrayValueForKey:@"model"];
-	[proxy setArray:newModel];
+	[self _doChangeToRuleEditorData:^{
+		// we have to access the model in the same way the rule editor does for it to realize the changes
+		NSMutableArray *proxy = [_modelContainer mutableArrayValueForKey:@"model"];
+		[proxy setArray:newModel];
+	}];
 
 	[newModel release];
 }
@@ -1216,7 +1380,7 @@ fail:
 		[self _ensureValidOperatorCache:col];
 		// try to find it in the operator cache
 		for(OpNode *node in [col operatorCache]) {
-			if([[[node filter] objectForKey:@"MenuLabel"] isEqualToString:title]) return node;
+			if([[node name] isEqualToString:title]) return node;
 		}
 	}
 	return nil;
@@ -1346,7 +1510,7 @@ BOOL SerIsGroup(NSDictionary *dict)
 		// SPTableFilterParser will return nil if it doesn't like the arguments and NSMutableString doesn't like nil
 		if(!sql) {
 			if(err) *err = [NSError errorWithDomain:SPErrorDomain code:3 userInfo:@{
-				NSLocalizedDescriptionKey: NSLocalizedString(@"No valid SQL expression could be generated. Make sure that you have filled in all required fields.", @"filter to sql conversion : internal error : SPTableFilterParser failed"),
+				NSLocalizedDescriptionKey: NSLocalizedString(@"No valid SQL expression could be generated. Perhaps the filter definition is invalid.", @"filter to sql conversion : internal error : SPTableFilterParser failed"),
 			}];
 			[parser release];
 			return;
@@ -1357,6 +1521,17 @@ BOOL SerIsGroup(NSDictionary *dict)
 	}
 	
 	if(wrap) [out appendString:@")"];
+}
+
+- (void)_doChangeToRuleEditorData:(void (^)(void))duringBlock
+{
+	@try {
+		isDoingChangeCausedOutsideOfRuleEditor = YES;
+		duringBlock();
+	}
+	@finally {
+		isDoingChangeCausedOutsideOfRuleEditor = NO;
+	}
 }
 
 @end
@@ -1376,6 +1551,11 @@ BOOL SerIsGroup(NSDictionary *dict)
 	if (other && [[other class] isEqual:[self class]] && [(RuleNode *)other type] == type) return YES;
 
 	return NO;
+}
+
+- (BOOL)isViableReplacementFor:(RuleNode *)other
+{
+	return [other type] == type;
 }
 
 @end
@@ -1472,6 +1652,15 @@ BOOL SerIsGroup(NSDictionary *dict)
 	return NO;
 }
 
+- (BOOL)isViableReplacementFor:(RuleNode *)other {
+	return [super isViableReplacementFor:other] && [parentColumn isEqual:[(OpNode *)other parentColumn]];
+}
+
+- (NSString *)name
+{
+	return [filter objectForKey:@"MenuLabel"];
+}
+
 @end
 
 @implementation ArgNode
@@ -1506,6 +1695,10 @@ BOOL SerIsGroup(NSDictionary *dict)
 	if (other && [[other class] isEqual:[self class]] && [filter isEqualToDictionary:[(ArgNode *)other filter]] && argIndex == [(ArgNode *)other argIndex]) return YES;
 
 	return NO;
+}
+
+- (BOOL)isViableReplacementFor:(RuleNode *)other {
+	return [super isViableReplacementFor:other] && [(ArgNode *)other argIndex] == argIndex;
 }
 
 @end
